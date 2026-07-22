@@ -1,0 +1,79 @@
+body {
+    font-family:Verdana, Geneva, Tahoma, sans-serif;
+    color: #ddd;
+    margin: 40px;
+    background: #000000;
+    text-shadow: 1px 1px 3px rgba(0,0,0,0.4);
+    background-image: url("https://images.pexels.com/photos/7114270/pexels-photo-7114270.jpeg");
+}
+
+.container {
+    max-width: 1000px;
+    margin: auto;
+}
+
+h1 {
+    color: #ffffff;
+    text-shadow:
+        0 0 5px hsla(0, 7%, 97%, 0.753),
+        0 0 10px #7c0b0b,
+        0 0 20px #ff4d4d;
+}
+
+
+.card {
+    background: rgba(111, 111, 169, 0.464);
+    padding: 20px;
+    margin-bottom: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgb(4, 4, 4);
+}
+
+input,
+select {
+    width: 100%;
+    padding: 8px;
+    margin-top: 5px;
+    margin-bottom: 15px;
+    box-sizing: border-box;
+}
+
+button {
+    background: #0078d4;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 5px;
+}
+
+button:hover {
+    background: #005ea6;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    border: 1px solid #ddd;
+    padding: 10px;
+}
+
+th {
+    background: #0078d4;
+    color: white;
+}
+
+.kontostand {
+    color: rgb(0, 174, 26);
+    font-size: 1.5rem;
+    font-weight: bold;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.951);
+}
+
+.title{
+    color: rgb(240, 255, 246);
+}
