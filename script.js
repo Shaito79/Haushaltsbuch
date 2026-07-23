@@ -1,16 +1,8 @@
-
-const jahrSelect = document.getElementById("jahr");
-const aktuellesJahr = new Date().getFullYear();
-
-for (let jahr = aktuellesJahr - 5; jahr <= aktuellesJahr + 5; jahr++) {
-    const option = document.createElement("option");
-
-    option.value = jahr;
-    option.textContent = jahr;
-
-    if (jahr === aktuellesJahr) {
-        option.selected = true;
-    }
-
-    jahrSelect.appendChild(option);
-}
+// Meldungen nach einigen Sekunden dezent ausblenden.
+document.querySelectorAll('.alert').forEach((element) => {
+    window.setTimeout(() => {
+        element.style.transition = 'opacity .35s ease';
+        element.style.opacity = '0';
+        window.setTimeout(() => element.remove(), 350);
+    }, 5000);
+});
