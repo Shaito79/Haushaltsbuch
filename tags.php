@@ -3,43 +3,80 @@ require_once __DIR__ . '/config/Database.php';
 require_once __DIR__ . '/dao/TagDAO.php';
 
 $tagDAO = new TagDAO();
+$errors = [];
 
 // CREATE & UPDATE
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $name = trim($_POST['name'] ?? '');
 
-    if ($action === 'create' && !empty($name)) {
-        $tagDAO->createTag($name);
-    } elseif ($action === 'update' && !empty($name)) {
-        $id = (int)$_POST['id'];
-        $tagDAO->updateTag($id, $name);
+    // VALIDIERUNG
+    if (empty($name)) {
+        $errors[] = "Der Tag-Name darf nicht leer sein.";
+    } elseif (mb_strlen($name) > 50) {
+        $errors[] = "Der Name darf maximal 50 Zeichen lang sein.";
     }
-    header("Location: tags.php");
-    exit;
-}
 
-// DELETE
-if (isset($_GET['delete'])) {
-    $tagDAO->deleteTag((int)$_GET['delete']);
-    header("Location: tags.php");
-    exit;
-}
-
-// EDIT (Tag zum Bearbeiten laden)
-$editTag = null;
-if (isset($_GET['edit'])) {
-    $editId = (int)$_GET['edit'];
-    foreach ($tagDAO->getAllTags() as $t) {
-        if ($t['id'] == $editId) {
-            $editTag = $t;
-            break;
+    // SPEICHERN (mit try-catch)
+    if (empty($errors)) {
+        try {
+            if ($action === 'create') {
+                $tagDAO->createTag($name);
+                header("Location: tags.php");
+                exit;
+            } elseif ($action === 'update') {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id > 0) {
+                    $tagDAO->updateTag($id, $name);
+                    header("Location: tags.php");
+                    exit;
+                } else {
+                    $errors[] = "Ungültige ID.";
+                }
+            }
+        } catch (PDOException $e) {
+            $errors[] = "Fehler beim Speichern: " . $e->getMessage();
         }
     }
 }
 
-// READ
-$tags = $tagDAO->getAllTags();
+// DELETE (mit try-catch für Foreign Keys)
+if (isset($_GET['delete'])) {
+    $deleteId = (int)$_GET['delete'];
+    if ($deleteId > 0) {
+        try {
+            $tagDAO->deleteTag($deleteId);
+            header("Location: tags.php");
+            exit;
+        } catch (PDOException $e) {
+            // Code 23000 = Foreign Key Constraint (Wird noch verwendet)
+            if ($e->getCode() == 23000) {
+                $errors[] = "Dieser Tag kann nicht gelöscht werden, da er noch in Transaktionen verwendet wird.";
+            } else {
+                $errors[] = "Fehler beim Löschen: " . $e->getMessage();
+            }
+        }
+    }
+}
+
+// EDIT & READ (mit try-catch)
+$editTag = null;
+$tags = [];
+
+try {
+    if (isset($_GET['edit'])) {
+        $editId = (int)$_GET['edit'];
+        foreach ($tagDAO->getAllTags() as $t) {
+            if ($t['id'] == $editId) {
+                $editTag = $t;
+                break;
+            }
+        }
+    }
+    $tags = $tagDAO->getAllTags();
+} catch (PDOException $e) {
+    $errors[] = "Fehler beim Laden der Tags: " . $e->getMessage();
+}
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -50,14 +87,25 @@ $tags = $tagDAO->getAllTags();
 <body>
     <h1>Tags verwalten</h1>
 
-    <!-- FORMULAR (Create / Update) -->
+    <!-- FEHLERMELDUNGEN ANZEIGEN -->
+    <?php if (!empty($errors)): ?>
+        <div style="color: red; margin-bottom: 15px;">
+            <ul>
+                <?php foreach ($errors as $error): ?>
+                    <li><?= htmlspecialchars($error) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
+    <?php endif; ?>
+
+    <!-- FORMULAR -->
     <form action="tags.php" method="POST">
         <input type="hidden" name="action" value="<?= $editTag ? 'update' : 'create' ?>">
         <?php if ($editTag): ?>
             <input type="hidden" name="id" value="<?= $editTag['id'] ?>">
         <?php endif; ?>
 
-        <input type="text" name="name" placeholder="Tag-Name" value="<?= htmlspecialchars($editTag['name'] ?? '') ?>" required>
+        <input type="text" name="name" placeholder="Tag-Name" value="<?= htmlspecialchars($_POST['name'] ?? $editTag['name'] ?? '') ?>" required>
         <button type="submit"><?= $editTag ? 'Speichern' : 'Hinzufügen' ?></button>
         <?php if ($editTag): ?>
             <a href="tags.php">Abbrechen</a>
@@ -66,7 +114,7 @@ $tags = $tagDAO->getAllTags();
 
     <hr>
 
-    <!-- TABELLE (Read) -->
+    <!-- TABELLE -->
     <table border="1" cellpadding="8">
         <tr>
             <th>ID</th>
