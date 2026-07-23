@@ -8,6 +8,21 @@ class ThemaDAO {
         $stmt = $this->pdo->prepare('INSERT INTO themen (name, typ) VALUES (:name, :typ)');
         return $stmt->execute(['name' => trim($name), 'typ' => $typ]);
     }
+
+    // 1. CREATE
+    public function createThema($name) {
+        $stmt = $this->pdo->prepare("INSERT INTO themen (name) VALUES (:name)");
+        return $stmt->execute([':name' => $name]);
+    }
+
+    // 2. READ
+    public function getAllThemen() {
+        $stmt = $this->pdo->prepare("SELECT * FROM themen ORDER BY id DESC");
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+
+
     public function updateThema(int $id, string $name, string $typ): bool {
         $stmt = $this->pdo->prepare('UPDATE themen SET name = :name, typ = :typ WHERE id = :id');
         return $stmt->execute(['id' => $id, 'name' => trim($name), 'typ' => $typ]);
@@ -21,3 +36,4 @@ class ThemaDAO {
         return $this->pdo->prepare('DELETE FROM themen WHERE id = ?')->execute([$id]);
     }
 }
+
