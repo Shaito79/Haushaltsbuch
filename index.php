@@ -113,6 +113,49 @@ try {
             $stmt->execute(['name' => $name]);
             redirectHome(['meldung' => 'Tag wurde erstellt.']);
         }
+
+        if ($aktion === 'thema_aktualisieren') {
+            $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+            $name = trim((string)($_POST['name'] ?? ''));
+            $typ = $_POST['thema_typ'] ?? '';
+            if (!$id || $name === '' || !in_array($typ, ['einnahme', 'ausgabe'], true)) {
+                throw new RuntimeException('Ungültige Kategorieangaben.');
+            }
+            $stmt = $pdo->prepare('UPDATE themen SET name = :name, typ = :typ WHERE id = :id');
+            $stmt->execute(['name' => $name, 'typ' => $typ, 'id' => $id]);
+            redirectHome(['meldung' => 'Kategorie wurde aktualisiert.']);
+        }
+
+        if ($aktion === 'thema_loeschen') {
+            $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+            if (!$id) throw new RuntimeException('Ungültige Kategorie-ID.');
+            $stmt = $pdo->prepare('SELECT COUNT(*) FROM transaktionen WHERE thema_id = ?');
+            $stmt->execute([$id]);
+            if ((int)$stmt->fetchColumn() > 0) {
+                throw new RuntimeException('Diese Kategorie wird noch von Buchungen verwendet und kann nicht gelöscht werden.');
+            }
+            $pdo->prepare('DELETE FROM themen WHERE id = ?')->execute([$id]);
+            redirectHome(['meldung' => 'Kategorie wurde gelöscht.']);
+        }
+
+        if ($aktion === 'tag_aktualisieren') {
+            $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+            $name = trim((string)($_POST['name'] ?? ''));
+            if (!$id || $name === '') throw new RuntimeException('Ungültige Tagangaben.');
+            $stmt = $pdo->prepare('UPDATE tags SET name = :name WHERE id = :id');
+            $stmt->execute(['name' => $name, 'id' => $id]);
+            redirectHome(['meldung' => 'Tag wurde aktualisiert.']);
+        }
+
+        if ($aktion === 'tag_loeschen') {
+            $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+            if (!$id) throw new RuntimeException('Ungültige Tag-ID.');
+            $pdo->beginTransaction();
+            $pdo->prepare('DELETE FROM transaktionen_tags WHERE tag_id = ?')->execute([$id]);
+            $pdo->prepare('DELETE FROM tags WHERE id = ?')->execute([$id]);
+            $pdo->commit();
+            redirectHome(['meldung' => 'Tag wurde gelöscht und aus den Buchungen entfernt.']);
+        }
     }
 } catch (Throwable $e) {
     if ($pdo->inTransaction()) {
@@ -174,6 +217,30 @@ while ($cursor <= $endCursor) {
     $cursor = $cursor->modify('+1 month');
 }
 
+$categoryStmt = $pdo->prepare(
+    'SELECT th.name, ABS(SUM(t.betrag)) AS summe
+     FROM transaktionen t
+     JOIN themen th ON th.id = t.thema_id
+     WHERE t.konto_id = :konto_id AND t.betrag < 0
+       AND t.datum BETWEEN :von AND :bis
+     GROUP BY th.id, th.name
+     ORDER BY summe DESC LIMIT 8'
+);
+$categoryStmt->execute(['konto_id' => $kontoId, 'von' => $rangeStart, 'bis' => $rangeEnd]);
+$categoryRows = $categoryStmt->fetchAll();
+$categoryLabels = array_column($categoryRows, 'name');
+$categoryValues = array_map('floatval', array_column($categoryRows, 'summe'));
+
+$periodSummaryStmt = $pdo->prepare(
+    'SELECT
+        COALESCE(SUM(CASE WHEN betrag > 0 THEN betrag ELSE 0 END), 0) AS einnahmen,
+        COALESCE(ABS(SUM(CASE WHEN betrag < 0 THEN betrag ELSE 0 END)), 0) AS ausgaben
+     FROM transaktionen
+     WHERE konto_id = :konto_id AND datum BETWEEN :von AND :bis'
+);
+$periodSummaryStmt->execute(['konto_id' => $kontoId, 'von' => $rangeStart, 'bis' => $rangeEnd]);
+$periodSummary = $periodSummaryStmt->fetch();
+
 $filterTyp = $_GET['filter_typ'] ?? 'alle';
 $filterThema = filter_input(INPUT_GET, 'filter_thema', FILTER_VALIDATE_INT) ?: 0;
 $filterTag = filter_input(INPUT_GET, 'filter_tag', FILTER_VALIDATE_INT) ?: 0;
@@ -234,11 +301,19 @@ if ($editId) {
 </head>
 <body>
 <header class="topbar">
-    <div><span class="logo"><i class="bi bi-wallet2"></i></span><strong>Haushaltskasse</strong></div>
+    <a class="brand" href="index.php"><span class="logo"><i class="bi bi-wallet2"></i></span><strong>Haushaltskasse</strong></a>
+    <nav class="main-nav" aria-label="Hauptnavigation">
+        <a href="#dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+        <a href="#diagramme"><i class="bi bi-bar-chart-line"></i> Diagramme</a>
+        <a href="#buchungsformular"><i class="bi bi-plus-circle"></i> Neue Buchung</a>
+        <a href="#verwaltung"><i class="bi bi-tags"></i> Themen &amp; Tags</a>
+        <a href="#buchungen"><i class="bi bi-receipt"></i> Buchungen</a>
+        <a href="diagramme/index.php"><i class="bi bi-box-arrow-up-right"></i> Diagrammseite</a>
+    </nav>
     <span class="account-name"><?= htmlspecialchars($konto['name']) ?></span>
 </header>
 
-<main class="page-shell">
+<main class="page-shell" id="dashboard">
     <?php if ($meldung): ?><div class="alert success"><?= htmlspecialchars($meldung) ?></div><?php endif; ?>
     <?php if ($fehler): ?><div class="alert error"><?= htmlspecialchars($fehler) ?></div><?php endif; ?>
 
@@ -250,17 +325,23 @@ if ($editId) {
     </section>
 
     <section class="content-grid">
-        <article class="panel chart-panel">
-            <div class="panel-heading">
-                <div><p class="eyebrow">Auswertung</p><h2>Monatlicher Saldo</h2></div>
-                <form class="range-form" method="get">
-                    <label>Anfangsmonat<input type="month" name="start_monat" value="<?= htmlspecialchars($startMonth) ?>"></label>
-                    <label>Endmonat<input type="month" name="end_monat" value="<?= htmlspecialchars($endMonth) ?>"></label>
-                    <button class="button secondary" type="submit"><i class="bi bi-arrow-repeat"></i> Anzeigen</button>
-                </form>
+        <section class="charts-column" id="diagramme">
+            <article class="panel chart-panel wide-chart">
+                <div class="panel-heading">
+                    <div><p class="eyebrow">Auswertung</p><h2>Monatlicher Saldo</h2></div>
+                    <form class="range-form" method="get">
+                        <label>Anfangsmonat<input type="month" name="start_monat" value="<?= htmlspecialchars($startMonth) ?>"></label>
+                        <label>Endmonat<input type="month" name="end_monat" value="<?= htmlspecialchars($endMonth) ?>"></label>
+                        <button class="button secondary" type="submit"><i class="bi bi-arrow-repeat"></i> Anzeigen</button>
+                    </form>
+                </div>
+                <div class="chart-wrap"><canvas id="saldoChart"></canvas></div>
+            </article>
+            <div class="small-charts-grid">
+                <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">Zeitraum</p><h2>Einnahmen vs. Ausgaben</h2></div></div><div class="chart-wrap small"><canvas id="incomeExpenseChart"></canvas></div></article>
+                <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">Top 8</p><h2>Ausgaben nach Kategorie</h2></div></div><div class="chart-wrap small"><canvas id="categoryChart"></canvas></div></article>
             </div>
-            <div class="chart-wrap"><canvas id="saldoChart"></canvas></div>
-        </article>
+        </section>
 
         <article class="panel form-panel" id="buchungsformular">
             <div class="panel-heading"><div><p class="eyebrow"><?= $editTransaktion ? 'Bearbeiten' : 'Neu erfassen' ?></p><h2><?= $editTransaktion ? 'Buchung verändern' : 'Neue Buchung' ?></h2></div></div>
@@ -278,12 +359,39 @@ if ($editId) {
         </article>
     </section>
 
-    <section class="management-grid">
-        <article class="panel compact"><div class="panel-heading"><div><p class="eyebrow">Verwaltung</p><h2>Neue Kategorie</h2></div></div><form method="post" class="inline-form"><input type="hidden" name="aktion" value="thema_erstellen"><input type="text" name="name" required maxlength="50" placeholder="z. B. Gesundheit"><select name="thema_typ" required><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option></select><button class="button secondary" type="submit">Erstellen</button></form></article>
-        <article class="panel compact"><div class="panel-heading"><div><p class="eyebrow">Verwaltung</p><h2>Neuer Tag</h2></div></div><form method="post" class="inline-form"><input type="hidden" name="aktion" value="tag_erstellen"><input type="text" name="name" required maxlength="50" placeholder="z. B. Vertrag"><button class="button secondary" type="submit">Erstellen</button></form></article>
+    <section class="management-grid" id="verwaltung">
+        <article class="panel compact">
+            <div class="panel-heading"><div><p class="eyebrow">Verwaltung</p><h2>Kategorien</h2></div></div>
+            <form method="post" class="inline-form create-row"><input type="hidden" name="aktion" value="thema_erstellen"><input type="text" name="name" required maxlength="50" placeholder="Neue Kategorie"><select name="thema_typ" required><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option></select><button class="button secondary" type="submit">Erstellen</button></form>
+            <div class="management-list">
+                <?php foreach ($themen as $thema): ?>
+                <form method="post" class="management-row">
+                    <input type="hidden" name="id" value="<?= (int)$thema['id'] ?>">
+                    <input type="text" name="name" required maxlength="50" value="<?= htmlspecialchars($thema['name']) ?>">
+                    <select name="thema_typ"><option value="ausgabe"<?= selected('ausgabe', $thema['typ']) ?>>Ausgabe</option><option value="einnahme"<?= selected('einnahme', $thema['typ']) ?>>Einnahme</option></select>
+                    <button class="icon-button edit" name="aktion" value="thema_aktualisieren" type="submit" title="Kategorie speichern"><i class="bi bi-check-lg"></i></button>
+                    <button class="icon-button delete" name="aktion" value="thema_loeschen" type="submit" title="Kategorie löschen" onclick="return confirm('Kategorie wirklich löschen? Dies ist nur möglich, wenn sie nicht verwendet wird.');"><i class="bi bi-trash3"></i></button>
+                </form>
+                <?php endforeach; ?>
+            </div>
+        </article>
+        <article class="panel compact">
+            <div class="panel-heading"><div><p class="eyebrow">Verwaltung</p><h2>Tags</h2></div></div>
+            <form method="post" class="inline-form create-row"><input type="hidden" name="aktion" value="tag_erstellen"><input type="text" name="name" required maxlength="50" placeholder="Neuer Tag"><button class="button secondary" type="submit">Erstellen</button></form>
+            <div class="management-list">
+                <?php foreach ($tags as $tag): ?>
+                <form method="post" class="management-row tag-row">
+                    <input type="hidden" name="id" value="<?= (int)$tag['id'] ?>">
+                    <input type="text" name="name" required maxlength="50" value="<?= htmlspecialchars($tag['name']) ?>">
+                    <button class="icon-button edit" name="aktion" value="tag_aktualisieren" type="submit" title="Tag speichern"><i class="bi bi-check-lg"></i></button>
+                    <button class="icon-button delete" name="aktion" value="tag_loeschen" type="submit" title="Tag löschen" onclick="return confirm('Tag wirklich löschen? Er wird auch aus vorhandenen Buchungen entfernt.');"><i class="bi bi-trash3"></i></button>
+                </form>
+                <?php endforeach; ?>
+            </div>
+        </article>
     </section>
 
-    <section class="panel bookings-panel">
+    <section class="panel bookings-panel" id="buchungen">
         <div class="panel-heading"><div><p class="eyebrow">Übersicht</p><h2>Letzte Buchungen</h2></div><span class="result-count"><?= count($transaktionen) ?> Treffer</span></div>
         <form method="get" class="filter-bar">
             <label>Art<select name="filter_typ"><option value="alle"<?= selected('alle', $filterTyp) ?>>Alle</option><option value="ausgabe"<?= selected('ausgabe', $filterTyp) ?>>Zahlungen</option><option value="einnahme"<?= selected('einnahme', $filterTyp) ?>>Geldeingänge</option></select></label>
@@ -300,8 +408,10 @@ if ($editId) {
     </section>
 </main>
 <script>
-const ctx = document.getElementById('saldoChart');
-new Chart(ctx, {type: 'bar', data: {labels: <?= json_encode($monthlyLabels, JSON_UNESCAPED_UNICODE) ?>, datasets: [{label: 'Saldo', data: <?= json_encode($monthlyValues) ?>, backgroundColor: (c) => c.raw >= 0 ? '#16a34a' : '#dc2626', borderRadius: 6}]}, options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => new Intl.NumberFormat('de-DE', {style:'currency', currency:'EUR'}).format(c.raw)}}}, scales: {y: {ticks: {callback: v => v.toLocaleString('de-DE') + ' €'}, grid: {color: '#e5e7eb'}}, x: {grid: {display: false}}}}});
+const currency = value => new Intl.NumberFormat('de-DE', {style:'currency', currency:'EUR'}).format(value);
+new Chart(document.getElementById('saldoChart'), {type:'bar',data:{labels:<?= json_encode($monthlyLabels, JSON_UNESCAPED_UNICODE) ?>,datasets:[{label:'Saldo',data:<?= json_encode($monthlyValues) ?>,backgroundColor:c=>c.raw>=0?'#16a34a':'#dc2626',borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>currency(c.raw)}}},scales:{y:{ticks:{callback:v=>v.toLocaleString('de-DE')+' €'},grid:{color:'#e5e7eb'}},x:{grid:{display:false}}}}});
+new Chart(document.getElementById('incomeExpenseChart'), {type:'doughnut',data:{labels:['Einnahmen','Ausgaben'],datasets:[{data:[<?= (float)$periodSummary['einnahmen'] ?>,<?= (float)$periodSummary['ausgaben'] ?>],backgroundColor:['#16a34a','#dc2626'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:c=>c.label+': '+currency(c.raw)}}}}});
+new Chart(document.getElementById('categoryChart'), {type:'bar',data:{labels:<?= json_encode($categoryLabels, JSON_UNESCAPED_UNICODE) ?>,datasets:[{label:'Ausgaben',data:<?= json_encode($categoryValues) ?>,backgroundColor:'#2563eb',borderRadius:6}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>currency(c.raw)}}},scales:{x:{ticks:{callback:v=>v.toLocaleString('de-DE')+' €'},grid:{color:'#e5e7eb'}},y:{grid:{display:false}}}}});
 </script>
 <script src="./script.js"></script>
 </body>
