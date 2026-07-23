@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/db.php';
+$pdo = require __DIR__ . '/db.php';
 
 function redirectHome(array $params = []): never {
     $query = $params ? '?' . http_build_query($params) : '';
@@ -244,6 +244,16 @@ $periodSummary = $periodSummaryStmt->fetch();
 $filterTyp = $_GET['filter_typ'] ?? 'alle';
 $filterThema = filter_input(INPUT_GET, 'filter_thema', FILTER_VALIDATE_INT) ?: 0;
 $filterTag = filter_input(INPUT_GET, 'filter_tag', FILTER_VALIDATE_INT) ?: 0;
+$filterVon = $_GET['filter_von'] ?? '';
+$filterBis = $_GET['filter_bis'] ?? '';
+
+// Ungültige Datumswerte ignorieren; bei vertauschtem Bereich werden die Werte getauscht.
+if ($filterVon !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $filterVon)) $filterVon = '';
+if ($filterBis !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $filterBis)) $filterBis = '';
+if ($filterVon !== '' && $filterBis !== '' && $filterVon > $filterBis) {
+    [$filterVon, $filterBis] = [$filterBis, $filterVon];
+}
+
 $sort = $_GET['sort'] ?? 'datum';
 $richtung = strtolower($_GET['richtung'] ?? 'desc') === 'asc' ? 'ASC' : 'DESC';
 $sortMap = ['datum' => 't.datum', 'betrag' => 't.betrag', 'details' => 't.beschreibung'];
@@ -257,6 +267,14 @@ if ($filterThema) { $where[] = 't.thema_id = :thema_id'; $params['thema_id'] = $
 if ($filterTag) {
     $where[] = 'EXISTS (SELECT 1 FROM transaktionen_tags ftt WHERE ftt.transaktion_id = t.id AND ftt.tag_id = :tag_id)';
     $params['tag_id'] = $filterTag;
+}
+if ($filterVon !== '') {
+    $where[] = 't.datum >= :filter_von';
+    $params['filter_von'] = $filterVon;
+}
+if ($filterBis !== '') {
+    $where[] = 't.datum <= :filter_bis';
+    $params['filter_bis'] = $filterBis;
 }
 
 $sql = "SELECT t.*, th.name AS thema_name,
@@ -396,6 +414,8 @@ if ($editId) {
         <form method="get" class="filter-bar">
             <label>Art<select name="filter_typ"><option value="alle"<?= selected('alle', $filterTyp) ?>>Alle</option><option value="ausgabe"<?= selected('ausgabe', $filterTyp) ?>>Zahlungen</option><option value="einnahme"<?= selected('einnahme', $filterTyp) ?>>Geldeingänge</option></select></label>
             <label>Thema<select name="filter_thema"><option value="0">Alle Themen</option><?php foreach ($themen as $thema): ?><option value="<?= (int)$thema['id'] ?>"<?= selected($thema['id'], $filterThema) ?>><?= htmlspecialchars($thema['name']) ?></option><?php endforeach; ?></select></label>
+            <label>Ab<input type="date" name="filter_von" value="<?= htmlspecialchars($filterVon) ?>"></label>
+            <label>Bis<input type="date" name="filter_bis" value="<?= htmlspecialchars($filterBis) ?>"></label>
             <label>Tag<select name="filter_tag"><option value="0">Alle Tags</option><?php foreach ($tags as $tag): ?><option value="<?= (int)$tag['id'] ?>"<?= selected($tag['id'], $filterTag) ?>><?= htmlspecialchars($tag['name']) ?></option><?php endforeach; ?></select></label>
             <label>Sortieren nach<select name="sort"><option value="datum"<?= selected('datum', $sort) ?>>Datum</option><option value="betrag"<?= selected('betrag', $sort) ?>>Betrag</option><option value="details"<?= selected('details', $sort) ?>>Details</option></select></label>
             <label>Reihenfolge<select name="richtung"><option value="desc"<?= selected('desc', strtolower($richtung)) ?>>Absteigend</option><option value="asc"<?= selected('asc', strtolower($richtung)) ?>>Aufsteigend</option></select></label>

@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../db.php';
+$pdo = require __DIR__ . '/../db.php';
 $kontoId = 1;
 $startMonth = $_GET['start_monat'] ?? date('Y-m', strtotime('-11 months'));
 $endMonth = $_GET['end_monat'] ?? date('Y-m');
