@@ -1,35 +1,10 @@
 <?php
 require_once __DIR__ . '/../config/Database.php';
-
 class KontoDAO {
-    private $pdo;
-
-    public function __construct() {
-        $this->pdo = Database::getInstance()->getConnection();
-    }
-
-    // 1. CREATE
-    public function createKonto($name) {
-        $stmt = $this->pdo->prepare("INSERT INTO konten (name) VALUES (:name)");
-        return $stmt->execute([':name' => $name]);
-    }
-
-    // 2. READ
-    public function getAllKonten() {
-        $stmt = $this->pdo->prepare("SELECT * FROM konten ORDER BY id DESC");
-        $stmt->execute();
-        return $stmt->fetchAll();
-    }
-
-    // 3. UPDATE
-    public function updateKonto($id, $name) {
-        $stmt = $this->pdo->prepare("UPDATE konten SET name = :name WHERE id = :id");
-        return $stmt->execute([':name' => $name, ':id' => $id]);
-    }
-
-    // 4. DELETE
-    public function deleteKonto($id) {
-        $stmt = $this->pdo->prepare("DELETE FROM konten WHERE id = :id");
-        return $stmt->execute([':id' => $id]);
+    private PDO $pdo;
+    public function __construct() { $this->pdo = Database::getInstance()->getConnection(); }
+    public function getKontostand(int $kontoId = 1): float {
+        $stmt=$this->pdo->prepare('SELECT k.kontostand + COALESCE(SUM(t.betrag),0) AS kontostand FROM konten k LEFT JOIN transaktionen t ON t.konto_id=k.id WHERE k.id=:id GROUP BY k.id,k.kontostand');
+        $stmt->execute(['id'=>$kontoId]); $row=$stmt->fetch(); return $row?(float)$row['kontostand']:0.0;
     }
 }
