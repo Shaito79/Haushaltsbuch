@@ -1,5 +1,4 @@
 <?php
-
 class Statistik
 {
 
@@ -257,5 +256,3 @@ class Statistik
     }
 
 
-
-}
