@@ -10,9 +10,9 @@ class ThemaDAO {
    // }
 
     // 1. CREATE
-    public function createThema($name) {
-        $stmt = $this->pdo->prepare("INSERT INTO themen (name) VALUES (:name)");
-        return $stmt->execute([':name' => $name]);
+    public function createThema(string $name, string $typ): bool {
+        $stmt = $this->pdo->prepare("INSERT INTO themen (name, typ) VALUES (:name, :typ)");
+        return $stmt->execute([':name' => trim($name), ':typ' => $typ]);
     }
 
     // 2. READ

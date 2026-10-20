@@ -48,6 +48,8 @@ if (isset($_GET['delete'])) {
             $kontoDAO->deleteKonto($deleteId);
             header("Location: konten.php");
             exit;
+        } catch (RuntimeException $e) {
+            $errors[] = $e->getMessage();
         } catch (PDOException $e) {
             if ($e->getCode() == 23000) {
                 $errors[] = "Dieses Konto kann nicht gelöscht werden, da noch Transaktionen darauf gebucht sind.";
