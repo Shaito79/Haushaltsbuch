@@ -8,26 +8,30 @@ $errors = [];
 // CREATE & UPDATE
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
-    $name = trim($_POST['name'] ?? '');
+    $name = trim((string)($_POST['name'] ?? ''));
+    $typ = $_POST['typ'] ?? '';
 
     // VALIDIERUNG
-    if (empty($name)) {
+    if ($name === '') {
         $errors[] = "Der Thema-Name darf nicht leer sein.";
     } elseif (mb_strlen($name) > 50) {
         $errors[] = "Der Name darf maximal 50 Zeichen lang sein.";
+    }
+    if (!in_array($typ, ['einnahme', 'ausgabe'], true)) {
+        $errors[] = "Bitte einen gültigen Typ (Einnahme/Ausgabe) wählen.";
     }
 
     // SPEICHERN (mit try-catch)
     if (empty($errors)) {
         try {
             if ($action === 'create') {
-                $themaDAO->createThema($name);
+                $themaDAO->createThema($name, $typ);
                 header("Location: themen.php");
                 exit;
             } elseif ($action === 'update') {
                 $id = (int)($_POST['id'] ?? 0);
                 if ($id > 0) {
-                    $themaDAO->updateThema($id, $name);
+                    $themaDAO->updateThema($id, $name, $typ);
                     header("Location: themen.php");
                     exit;
                 } else {
@@ -48,6 +52,8 @@ if (isset($_GET['delete'])) {
             $themaDAO->deleteThema($deleteId);
             header("Location: themen.php");
             exit;
+        } catch (RuntimeException $e) {
+            $errors[] = $e->getMessage();
         } catch (PDOException $e) {
             if ($e->getCode() == 23000) {
                 $errors[] = "Dieses Thema kann nicht gelöscht werden, da es noch in Transaktionen verwendet wird.";
@@ -105,6 +111,11 @@ try {
         <?php endif; ?>
 
         <input type="text" name="name" placeholder="Thema-Name" value="<?= htmlspecialchars($_POST['name'] ?? $editThema['name'] ?? '') ?>" required>
+        <?php $aktuellerTyp = $_POST['typ'] ?? $editThema['typ'] ?? 'ausgabe'; ?>
+        <select name="typ" required>
+            <option value="ausgabe"<?= $aktuellerTyp === 'ausgabe' ? ' selected' : '' ?>>Ausgabe</option>
+            <option value="einnahme"<?= $aktuellerTyp === 'einnahme' ? ' selected' : '' ?>>Einnahme</option>
+        </select>
         <button type="submit"><?= $editThema ? 'Speichern' : 'Hinzufügen' ?></button>
         <?php if ($editThema): ?>
             <a href="themen.php">Abbrechen</a>
@@ -118,12 +129,14 @@ try {
         <tr>
             <th>ID</th>
             <th>Name</th>
+            <th>Typ</th>
             <th>Aktionen</th>
         </tr>
         <?php foreach ($themen as $thema): ?>
             <tr>
                 <td><?= $thema['id'] ?></td>
                 <td><?= htmlspecialchars($thema['name']) ?></td>
+                <td><?= $thema['typ'] === 'einnahme' ? 'Einnahme' : 'Ausgabe' ?></td>
                 <td>
                     <a href="themen.php?edit=<?= $thema['id'] ?>">Bearbeiten</a> | 
                     <a href="themen.php?delete=<?= $thema['id'] ?>" onclick="return confirm('Wirklich löschen?')">Löschen</a>

@@ -1,10 +1,12 @@
 <?php
 $pdo = require __DIR__ . '/../db.php';
 $kontoId = 1;
-$startMonth = $_GET['start_monat'] ?? date('Y-m', strtotime('-11 months'));
-$endMonth = $_GET['end_monat'] ?? date('Y-m');
-if (!preg_match('/^\d{4}-\d{2}$/', $startMonth)) $startMonth = date('Y-m', strtotime('-11 months'));
-if (!preg_match('/^\d{4}-\d{2}$/', $endMonth)) $endMonth = date('Y-m');
+// "first day of": sonst springt z. B. der 31.03. minus 11 Monate in den falschen Monat.
+$defaultStartMonth = date('Y-m', strtotime('first day of -11 months'));
+$startMonth = is_string($_GET['start_monat'] ?? null) ? $_GET['start_monat'] : $defaultStartMonth;
+$endMonth = is_string($_GET['end_monat'] ?? null) ? $_GET['end_monat'] : date('Y-m');
+if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $startMonth)) $startMonth = $defaultStartMonth;
+if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $endMonth)) $endMonth = date('Y-m');
 if ($startMonth > $endMonth) [$startMonth, $endMonth] = [$endMonth, $startMonth];
 $from = $startMonth . '-01';
 $to = date('Y-m-t', strtotime($endMonth . '-01'));

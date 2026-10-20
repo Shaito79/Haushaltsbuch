@@ -11,24 +11,57 @@ function selected(string|int $value, string|int $current): string {
     return (string)$value === (string)$current ? ' selected' : '';
 }
 
+// Liefert einen Request-Parameter nur, wenn er ein String ist (z. B. nicht bei ?feld[]=x).
+function param(array $source, string $key, string $default = ''): string {
+    return isset($source[$key]) && is_string($source[$key]) ? $source[$key] : $default;
+}
+
+function isValidDate(string $date): bool {
+    $d = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+    return $d !== false && $d->format('Y-m-d') === $date;
+}
+
+function isValidMonth(string $month): bool {
+    return (bool)preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month);
+}
+
+function themaNameExistiert(PDO $pdo, string $name, int $ausserId = 0): bool {
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM themen WHERE name = :name AND id <> :id');
+    $stmt->execute(['name' => $name, 'id' => $ausserId]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
 $kontoId = 1;
-$meldung = $_GET['meldung'] ?? '';
+$meldung = param($_GET, 'meldung');
 $fehler = '';
 
 try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $aktion = $_POST['aktion'] ?? '';
+        $aktion = param($_POST, 'aktion');
 
         if ($aktion === 'buchung_speichern' || $aktion === 'buchung_aktualisieren') {
             $themaId = filter_input(INPUT_POST, 'thema_id', FILTER_VALIDATE_INT);
-            $betrag = (float)str_replace(',', '.', (string)($_POST['betrag'] ?? '0'));
-            $typ = $_POST['typ'] ?? 'Ausgabe';
-            $datum = $_POST['datum'] ?? date('Y-m-d');
-            $beschreibung = trim((string)($_POST['beschreibung'] ?? ''));
-            $tagIds = array_values(array_filter(array_map('intval', $_POST['tag_ids'] ?? [])));
+            $betragText = str_replace(',', '.', param($_POST, 'betrag', '0'));
+            $betrag = is_numeric($betragText) ? (float)$betragText : 0.0;
+            $typ = param($_POST, 'typ', 'Ausgabe');
+            $datum = param($_POST, 'datum', date('Y-m-d'));
+            $beschreibung = trim(param($_POST, 'beschreibung'));
+            $tagIds = is_array($_POST['tag_ids'] ?? null)
+                ? array_values(array_unique(array_filter(array_map('intval', $_POST['tag_ids']))))
+                : [];
 
             if (!$themaId || $betrag <= 0 || !in_array($typ, ['Einnahme', 'Ausgabe'], true)) {
                 throw new RuntimeException('Bitte Buchungstyp, Betrag und Thema vollständig angeben.');
+            }
+            // Spalte betrag ist DECIMAL(10,2)
+            if ($betrag > 99999999.99) {
+                throw new RuntimeException('Der Betrag ist zu groß (maximal 99.999.999,99 €).');
+            }
+            if (!isValidDate($datum)) {
+                throw new RuntimeException('Bitte ein gültiges Datum angeben.');
+            }
+            if (mb_strlen($beschreibung) > 255) {
+                throw new RuntimeException('Die Details dürfen maximal 255 Zeichen lang sein.');
             }
 
             $betrag = $typ === 'Ausgabe' ? -abs($betrag) : abs($betrag);
@@ -38,6 +71,11 @@ try {
                 $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
                 if (!$id) {
                     throw new RuntimeException('Ungültige Buchungs-ID.');
+                }
+                $stmt = $pdo->prepare('SELECT COUNT(*) FROM transaktionen WHERE id = :id AND konto_id = :konto_id');
+                $stmt->execute(['id' => $id, 'konto_id' => $kontoId]);
+                if ((int)$stmt->fetchColumn() === 0) {
+                    throw new RuntimeException('Die Buchung wurde nicht gefunden.');
                 }
                 $stmt = $pdo->prepare(
                     'UPDATE transaktionen
@@ -72,8 +110,9 @@ try {
             }
 
             if ($tagIds) {
+                // Kein INSERT IGNORE: das würde auch Fremdschlüsselfehler (nicht existierende Tags) verschlucken.
                 $tagStmt = $pdo->prepare(
-                    'INSERT IGNORE INTO transaktionen_tags (transaktion_id, tag_id) VALUES (:transaktion_id, :tag_id)'
+                    'INSERT INTO transaktionen_tags (transaktion_id, tag_id) VALUES (:transaktion_id, :tag_id)'
                 );
                 foreach ($tagIds as $tagId) {
                     $tagStmt->execute(['transaktion_id' => $transaktionId, 'tag_id' => $tagId]);
@@ -94,10 +133,13 @@ try {
         }
 
         if ($aktion === 'thema_erstellen') {
-            $name = trim((string)($_POST['name'] ?? ''));
-            $typ = $_POST['thema_typ'] ?? '';
-            if ($name === '' || !in_array($typ, ['einnahme', 'ausgabe'], true)) {
-                throw new RuntimeException('Bitte einen Kategorienamen und einen gültigen Typ angeben.');
+            $name = trim(param($_POST, 'name'));
+            $typ = param($_POST, 'thema_typ');
+            if ($name === '' || mb_strlen($name) > 50 || !in_array($typ, ['einnahme', 'ausgabe'], true)) {
+                throw new RuntimeException('Bitte einen Kategorienamen (max. 50 Zeichen) und einen gültigen Typ angeben.');
+            }
+            if (themaNameExistiert($pdo, $name)) {
+                throw new RuntimeException('Diese Kategorie ist bereits vorhanden.');
             }
             $stmt = $pdo->prepare('INSERT INTO themen (name, typ) VALUES (:name, :typ)');
             $stmt->execute(['name' => $name, 'typ' => $typ]);
@@ -105,9 +147,9 @@ try {
         }
 
         if ($aktion === 'tag_erstellen') {
-            $name = trim((string)($_POST['name'] ?? ''));
-            if ($name === '') {
-                throw new RuntimeException('Bitte einen Tagnamen angeben.');
+            $name = trim(param($_POST, 'name'));
+            if ($name === '' || mb_strlen($name) > 50) {
+                throw new RuntimeException('Bitte einen Tagnamen (max. 50 Zeichen) angeben.');
             }
             $stmt = $pdo->prepare('INSERT INTO tags (name) VALUES (:name)');
             $stmt->execute(['name' => $name]);
@@ -116,10 +158,13 @@ try {
 
         if ($aktion === 'thema_aktualisieren') {
             $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
-            $name = trim((string)($_POST['name'] ?? ''));
-            $typ = $_POST['thema_typ'] ?? '';
-            if (!$id || $name === '' || !in_array($typ, ['einnahme', 'ausgabe'], true)) {
+            $name = trim(param($_POST, 'name'));
+            $typ = param($_POST, 'thema_typ');
+            if (!$id || $name === '' || mb_strlen($name) > 50 || !in_array($typ, ['einnahme', 'ausgabe'], true)) {
                 throw new RuntimeException('Ungültige Kategorieangaben.');
+            }
+            if (themaNameExistiert($pdo, $name, $id)) {
+                throw new RuntimeException('Diese Kategorie ist bereits vorhanden.');
             }
             $stmt = $pdo->prepare('UPDATE themen SET name = :name, typ = :typ WHERE id = :id');
             $stmt->execute(['name' => $name, 'typ' => $typ, 'id' => $id]);
@@ -140,8 +185,8 @@ try {
 
         if ($aktion === 'tag_aktualisieren') {
             $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
-            $name = trim((string)($_POST['name'] ?? ''));
-            if (!$id || $name === '') throw new RuntimeException('Ungültige Tagangaben.');
+            $name = trim(param($_POST, 'name'));
+            if (!$id || $name === '' || mb_strlen($name) > 50) throw new RuntimeException('Ungültige Tagangaben.');
             $stmt = $pdo->prepare('UPDATE tags SET name = :name WHERE id = :id');
             $stmt->execute(['name' => $name, 'id' => $id]);
             redirectHome(['meldung' => 'Tag wurde aktualisiert.']);
@@ -161,9 +206,13 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    $fehler = $e instanceof PDOException && $e->getCode() === '23000'
-        ? 'Dieser Name ist bereits vorhanden.'
-        : $e->getMessage();
+    // 1062 = doppelter Eintrag (UNIQUE), 1452 = Fremdschlüssel verweist ins Leere
+    $mysqlCode = $e instanceof PDOException ? (int)($e->errorInfo[1] ?? 0) : 0;
+    $fehler = match ($mysqlCode) {
+        1062 => 'Dieser Name ist bereits vorhanden.',
+        1452 => 'Das gewählte Thema oder ein Tag existiert nicht (mehr).',
+        default => $e->getMessage(),
+    };
 }
 
 $themen = $pdo->query('SELECT id, name, typ FROM themen ORDER BY name')->fetchAll();
@@ -190,10 +239,12 @@ $summaryStmt = $pdo->prepare(
 $summaryStmt->execute(['konto_id' => $kontoId]);
 $summary = $summaryStmt->fetch();
 
-$startMonth = $_GET['start_monat'] ?? date('Y-m', strtotime('-11 months'));
-$endMonth = $_GET['end_monat'] ?? date('Y-m');
-if (!preg_match('/^\d{4}-\d{2}$/', $startMonth)) $startMonth = date('Y-m', strtotime('-11 months'));
-if (!preg_match('/^\d{4}-\d{2}$/', $endMonth)) $endMonth = date('Y-m');
+// "first day of": sonst springt z. B. der 31.03. minus 11 Monate in den falschen Monat.
+$defaultStartMonth = date('Y-m', strtotime('first day of -11 months'));
+$startMonth = param($_GET, 'start_monat', $defaultStartMonth);
+$endMonth = param($_GET, 'end_monat', date('Y-m'));
+if (!isValidMonth($startMonth)) $startMonth = $defaultStartMonth;
+if (!isValidMonth($endMonth)) $endMonth = date('Y-m');
 if ($startMonth > $endMonth) [$startMonth, $endMonth] = [$endMonth, $startMonth];
 $rangeStart = $startMonth . '-01';
 $rangeEnd = date('Y-m-t', strtotime($endMonth . '-01'));
@@ -241,21 +292,21 @@ $periodSummaryStmt = $pdo->prepare(
 $periodSummaryStmt->execute(['konto_id' => $kontoId, 'von' => $rangeStart, 'bis' => $rangeEnd]);
 $periodSummary = $periodSummaryStmt->fetch();
 
-$filterTyp = $_GET['filter_typ'] ?? 'alle';
+$filterTyp = param($_GET, 'filter_typ', 'alle');
 $filterThema = filter_input(INPUT_GET, 'filter_thema', FILTER_VALIDATE_INT) ?: 0;
 $filterTag = filter_input(INPUT_GET, 'filter_tag', FILTER_VALIDATE_INT) ?: 0;
-$filterVon = $_GET['filter_von'] ?? '';
-$filterBis = $_GET['filter_bis'] ?? '';
+$filterVon = param($_GET, 'filter_von');
+$filterBis = param($_GET, 'filter_bis');
 
 // Ungültige Datumswerte ignorieren; bei vertauschtem Bereich werden die Werte getauscht.
-if ($filterVon !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $filterVon)) $filterVon = '';
-if ($filterBis !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $filterBis)) $filterBis = '';
+if ($filterVon !== '' && !isValidDate($filterVon)) $filterVon = '';
+if ($filterBis !== '' && !isValidDate($filterBis)) $filterBis = '';
 if ($filterVon !== '' && $filterBis !== '' && $filterVon > $filterBis) {
     [$filterVon, $filterBis] = [$filterBis, $filterVon];
 }
 
-$sort = $_GET['sort'] ?? 'datum';
-$richtung = strtolower($_GET['richtung'] ?? 'desc') === 'asc' ? 'ASC' : 'DESC';
+$sort = param($_GET, 'sort', 'datum');
+$richtung = strtolower(param($_GET, 'richtung', 'desc')) === 'asc' ? 'ASC' : 'DESC';
 $sortMap = ['datum' => 't.datum', 'betrag' => 't.betrag', 'details' => 't.beschreibung'];
 $sortColumn = $sortMap[$sort] ?? 't.datum';
 
